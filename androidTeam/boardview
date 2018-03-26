@@ -1,0 +1,523 @@
+### BoardViewGroup
+
+自定义viewGroup，实现的效果是 四个child 绕着中心点旋转。
+
+##### 
+
+重温下 自定义View/ViewGroup的步骤：
+
+1. 继承自View/ViewGroup
+2. 构造函数重写
+3. onMeasure/onLayout/onDraw方法重写
+
+经过上述几个步骤我们的自定义View/ViewGroup即可实现
+
+##### 
+
+此次，为了方便实现，ViewGroup内的child的数量写死为 4个，所以，他们的布局显而易见了，均匀分布于四周，分别为上下左右。
+在 measure  和 layout 过程中也比较容易实现。而为了给自定义viewGroup增加动画 ，增加了一个属性 angleOffset，表示偏移量，
+表示旋转的角度，单位是弧度。
+
+动画的实现使用属性动画 ，1.增加相应的getter/setter方法；2.onLayout 和 onMeasure 中 使用angleOffset属性来确定child的
+size 和位置；3.增加动画启动的触发事件，最终触发动画；
+
+```
+mOffsetAnimator = ObjectAnimator.ofFloat(this, "centerOffsetAngle", 0, (float) (2 * PI));
+mOffsetAnimator.setInterpolator(new LinearInterpolator());
+mOffsetAnimator.setRepeatCount(ValueAnimator.INFINITE);
+mOffsetAnimator.setDuration(1000 * (long) (2 * PI));
+```
+
+setter方法中 调用 requestLayout,重新走onMeasure和onLayout方法，最终实现child绕着中心店旋转；
+```
+public void setCenterOffsetAngle(float centerOffsetAngle) {
+    this.mCenterOffsetAngle = centerOffsetAngle;
+
+    // requestLayout 不断触发 onMeasure  onLayout过程
+    requestLayout();
+
+    // invalidate 不断触发onDraw
+    invalidate();
+}
+```
+
+##### 注意点
+
+1. layout 时，为了确定child的位置，需要根据三角函数来计算偏移量，基本是 sin 和 cos 函数的使用，有点生疏了
+2. 数学坐标系和android中坐标系不同，y轴方向和 坐标原点不一样；
+
+##### 后续修改
+
+1.相应触摸事件，可以实现child跟随触摸事件滑动，以及滑动速度的处理
+2.child个数可以动态添加，按圆周均匀分布
+3.其他
+
+
+
+最后附上代码 BoardViewGroup.java
+
+```
+package com.che300.demo.custom;
+
+import android.animation.ObjectAnimator;
+import android.animation.ValueAnimator;
+import android.content.Context;
+import android.content.res.TypedArray;
+import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.Paint;
+import android.graphics.Point;
+import android.util.AttributeSet;
+import android.util.DisplayMetrics;
+import android.util.Log;
+import android.util.TypedValue;
+import android.view.View;
+import android.view.ViewGroup;
+import android.view.animation.LinearInterpolator;
+
+import com.che300.demo.R;
+
+import static java.lang.Math.PI;
+
+/**
+ * BoardViewGroup 特性
+ * 1.
+ * 2.
+ * 3.
+ * 4.
+ * 5.
+ * <p>
+ * 步骤
+ * 1.继承自ViewGroup
+ * 2.构造函数重写
+ * 3.onMeasure/onLayout/onDraw方法重写，同时处理好 wrap_content属性
+ * 4.滑动冲突和弹性滑动处理
+ * 5.
+ *
+ * @author che300
+ */
+public class BoardViewGroup extends ViewGroup {
+
+    private static final String TAG = "BoardViewGroup";
+
+    protected final float DEFAULT_CENTER_RADIUS = 50;
+    protected final int DEFAULT_CENTER_COLOR = Color.RED;
+
+    private int mPaddingLeft;
+    private int mPaddingTop;
+    private int mPaddingRight;
+    private int mPaddingBottom;
+
+    private float mCenterRadius = 0;
+    private int mCenterOffsetX;
+    private int mCenterOffsetY;
+
+
+    private Paint mCenterPaint;
+
+    // 旋转角度，作为animation 基准量，以偏移角度确定child位置，偏移角度变化范围为 (0 - 360),ie (0 - 2 *Math.PI) in radian
+
+    private float mCenterOffsetAngle = 0;
+
+    private ObjectAnimator mOffsetAnimator;
+
+    private double mRadianLeft;
+    private double mRadianTop;
+    private double mRadianRight;
+    private double mRadianBottom;
+
+    private Point leftCenterPoint;
+    private Point topCenterPoint;
+    private Point rightCenterPoint;
+    private Point bottomCenterPoint;
+    private boolean hasCallOffset = false;
+
+
+    public BoardViewGroup(Context context) {
+        super(context);
+        init(null, 0);
+    }
+
+    public BoardViewGroup(Context context, AttributeSet attrs) {
+        super(context, attrs);
+        init(attrs, 0);
+    }
+
+    public BoardViewGroup(Context context, AttributeSet attrs, int defStyle) {
+        super(context, attrs, defStyle);
+        init(attrs, defStyle);
+    }
+
+    private void init(AttributeSet attrs, int defStyle) {
+        // Load attributes
+        final TypedArray a = getContext().obtainStyledAttributes(
+                attrs, R.styleable.BoardViewGroup, defStyle, 0);
+
+        /* get default dimension by unit */
+        float centerRadius = getDimensionByUnitAndMetric(TypedValue.COMPLEX_UNIT_DIP,
+                DEFAULT_CENTER_RADIUS);
+
+        mCenterRadius = a.getDimension(R.styleable.BoardViewGroup_centerRadius,
+                centerRadius);
+
+        a.recycle();
+
+        initCenterPaint();
+
+        setWillNotDraw(false);
+
+        initAngles();
+
+    }
+
+    private void initAngles() {
+        // 初始偏移量 -》 针对四个child 的情况
+//        mRadianLeft = 3 * Math.PI / 2;
+//        mRadianTop = 0;
+//        mRadianRight = Math.PI / 2;
+//        mRadianBottom = Math.PI;
+
+        mRadianLeft = 2 * Math.PI / 2;
+        mRadianTop = 0;// Math.PI/2
+        mRadianRight = 0;
+        mRadianBottom = Math.PI;// 3* Math.PI/2
+
+    }
+
+    private void initCenterPaint() {
+
+        mCenterPaint = new Paint();
+        mCenterPaint.setAntiAlias(true);
+        mCenterPaint.setStyle(Paint.Style.FILL);
+        mCenterPaint.setColor(DEFAULT_CENTER_COLOR);
+
+        //
+        mPaddingLeft = getPaddingLeft();
+        mPaddingTop = getPaddingTop();
+        mPaddingRight = getPaddingRight();
+        mPaddingBottom = getPaddingBottom();
+
+        // 四个位置child 中心点初始化
+        leftCenterPoint = new Point((int) -mCenterRadius, 0);
+        topCenterPoint = new Point(0, (int) -mCenterRadius);
+        rightCenterPoint = new Point((int) mCenterRadius, 0);
+        bottomCenterPoint = new Point(0, (int) mCenterRadius);
+    }
+
+    /**
+     * getDimensionByUnitAndMetric
+     *
+     * @param unit  unit
+     * @param value value
+     * @return dimension
+     */
+    private float getDimensionByUnitAndMetric(int unit, float value) {
+        DisplayMetrics displayMetrics = this.getResources().getDisplayMetrics();
+        return TypedValue.applyDimension(unit, value, displayMetrics);
+    }
+
+    /**
+     * -- 1.对于View，
+     * > onMeasure根据父ViewGroup为其设定的测量规格来测量自己的宽和高；
+     * -- 2.对于ViewGroup，
+     * > onMeasure根据父ViewGroup为其设定的测量规格来测量自己的宽和高，
+     * > 以及给childView传递测量规格和测量它的childView的宽和高
+     *
+     * @param widthMeasureSpec  widthMeasureSpec
+     * @param heightMeasureSpec heightMeasureSpec
+     */
+    @Override
+    protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+        super.onMeasure(widthMeasureSpec, heightMeasureSpec);
+        Log.i(TAG, "onMeasure method called!");
+        Log.i(TAG, String.format("onMeasure width = %d,height=%d", getWidth(), getHeight()));
+
+        /*
+         * 获得此ViewGroup上级容器为其推荐的宽和高，以及计算模式
+         * MeasureSpec类的源码分析-> http://blog.csdn.net/singwhatiwanna/article/details/38426471
+         */
+        int widthMode = MeasureSpec.getMode(widthMeasureSpec);
+        int widthSize = MeasureSpec.getSize(widthMeasureSpec);
+        int heightMode = MeasureSpec.getMode(heightMeasureSpec);
+        int heightSize = MeasureSpec.getSize(heightMeasureSpec);
+
+        /*
+         * 计算出所有的childView的宽和高，调用后，
+         * 它所有的childView的宽和高的值就被确定，也即getMeasuredWidth（）有值了
+         */
+        measureChildren(widthMeasureSpec, heightMeasureSpec);
+
+        int measuredWidth = widthSize;
+        int measuredHeight = heightSize;
+
+        if (getChildCount() == 0) {
+            // 如果没有子元素，就设置宽高都为 4*（简化处理）
+            measuredWidth = 0;
+            measuredHeight = 0;
+        } else if (widthMode == MeasureSpec.AT_MOST && heightMode == MeasureSpec.AT_MOST) {
+            //宽和高都是AT_MOST，则设置宽度所有子元素的宽度的和；高度设置为第一个元素的高度；
+            measuredWidth = widthSize;
+            measuredHeight = heightSize;
+        } else if (widthMode == MeasureSpec.AT_MOST) {
+            //如果宽度是wrap_content，则宽度为所有子元素的宽度的和
+            int childWidth = getChildAt(0).getMeasuredWidth();
+
+            measuredWidth = (int) (childWidth * 4 + 10f);
+            measuredHeight = heightSize;
+        } else if (heightMode == MeasureSpec.AT_MOST) {
+            //如果高度是wrap_content，则高度为第一个子元素的高度
+            int childHeight = getChildAt(0).getMeasuredHeight();
+
+            //        // 为了支持 子元素的margin属性
+            //        MarginLayoutParams lp = (MarginLayoutParams) child.getLayoutParams();
+            //        int childWidth = child.getMeasuredWidth() + lp.leftMargin + lp.rightMargin;
+            //        int childHeight = child.getMeasuredHeight() + lp.topMargin+ lp.bottomMargin;
+
+            measuredWidth = widthSize;
+            measuredHeight = (int) (childHeight * 4 + 10f);
+        }
+
+        /*
+         * 首先我们通过MeasureSpec类获取该ViewGroup父容器为其设置的计算模式和尺寸，
+         * 大多情况下，只要父容器不是设置的wrap_content（比如设置的为match_parent或者具体值），
+         * 父容器自己就能够计算出ViewGroup所占用的宽和高；
+         * 如果父容器设置的为wrap_content，父容器没法测量出自己大小，
+         * 就需要先让子childView自己去测量自己的尺寸（measureChildren(widthMeasureSpec, heightMeasureSpec); ）。
+         * 所以对于ViewGroup，如果其父容器为其设置的计算模式不是MeasureSpec.EXACTLY
+         * （根据onMeasure()方法父容器传递过来的规格参数获取）也即父容器设置的是wrap_content，
+         * 我们就需要在该ViewGroup中的onMeasure中手动去测量子childView的尺寸,
+         * 即通过measureChildren方法为其所有的孩子设置宽和高，执行完后，childView的宽和高都已经正确的计算过了根据childView的宽和高，
+         * 以及margin，计算ViewGroup在wrap_content时的宽和高。
+         * 在onMeasure方法的最后，要通过setMeasuredDimension()方法最终确定ViewGroup的大小。
+         */
+
+        setMeasuredDimension(measuredWidth, measuredHeight);
+
+    }
+
+
+    @Override
+    protected void onLayout(boolean changed, int l, int t, int r, int b) {
+        Log.i(TAG, "onLayout method called!");
+
+        // 第一步 固定四个view 分别在 上/下/左/右 四个方向
+        // 后面可扩展为 0 - n 个view，根据圆周均匀分布
+
+        int childCount = getChildCount();
+        if (childCount != 4) {
+            Log.e(TAG, "子View个数只能是4个");
+            //return;
+            throw new IllegalArgumentException("");
+        }
+
+        View topView = getChildAt(0);
+        //        int topWidth = topView.getMeasuredWidth();
+        //        int topHeight = topView.getMeasuredHeight();
+        //        MarginLayoutParams topMarginParams = (MarginLayoutParams) topView.getLayoutParams();
+
+        View bottomView = getChildAt(1);
+        View leftView = getChildAt(2);
+        View rightView = getChildAt(3);
+
+        //    topView.layout(
+        //            (int) (topCenterPoint.x - mCenterRadius / 2 + 2 * mCenterRadius * Math.sin(mRadianTop + mCenterOffsetAngle)),
+        //            (int) (topCenterPoint.y + mCenterRadius / 2 - 2 * mCenterRadius * Math.cos(mRadianTop + mCenterOffsetAngle)),
+        //            (int) (topCenterPoint.x + mCenterRadius / 2 + 2 * mCenterRadius * Math.sin(mRadianTop + mCenterOffsetAngle)),
+        //            (int) (topCenterPoint.y + 3*mCenterRadius / 2 - 2 * mCenterRadius * Math.cos(mRadianTop + mCenterOffsetAngle))
+        //    );
+
+        // layout -> left,top,right,bottom
+        double left, top, right, bottom;
+        double radian;
+
+        radian = mRadianTop + mCenterOffsetAngle;
+        left = topCenterPoint.x - mCenterRadius / 2 + 2 * mCenterRadius * Math.sin(radian);
+        top = topCenterPoint.y + mCenterRadius / 2 - 2 * mCenterRadius * Math.cos(radian);
+        right = topCenterPoint.x + mCenterRadius / 2 + 2 * mCenterRadius * Math.sin(radian);
+        bottom = topCenterPoint.y + 3 * mCenterRadius / 2 - 2 * mCenterRadius * Math.cos(radian);
+        topView.layout((int) left, (int) top, (int) right, (int) bottom);
+
+        //    bottomView.layout(
+        //            (int) (bottomCenterPoint.x - mCenterRadius / 2),
+        //            (int) (bottomCenterPoint.y + mCenterRadius / 2),
+        //            (int) (bottomCenterPoint.x + mCenterRadius / 2),
+        //            (int) (bottomCenterPoint.y + 3 * mCenterRadius / 2)
+        //    );
+
+        radian = mRadianBottom + mCenterOffsetAngle;
+        left = bottomCenterPoint.x - mCenterRadius / 2 + 2 * mCenterRadius * Math.sin(radian);
+        top = bottomCenterPoint.y - 3 * mCenterRadius / 2 - 2 * mCenterRadius * Math.cos(radian);
+        right = bottomCenterPoint.x + mCenterRadius / 2 + 2 * mCenterRadius * Math.sin(radian);
+        bottom = bottomCenterPoint.y - mCenterRadius / 2 - 2 * mCenterRadius * Math.cos(radian);
+        bottomView.layout((int) left, (int) top, (int) right, (int) bottom);
+
+        //    leftView.layout(
+        //            (int) (leftCenterPoint.x - 3 * mCenterRadius / 2),
+        //            (int) (leftCenterPoint.y - mCenterRadius / 2),
+        //            (int) (leftCenterPoint.x - mCenterRadius / 2),
+        //            (int) (leftCenterPoint.y + mCenterRadius / 2)
+        //    );
+        //    left = leftCenterPoint.x - 3 * mCenterRadius / 2;
+        //    top = leftCenterPoint.y - mCenterRadius / 2;
+        //    right = leftCenterPoint.x - mCenterRadius / 2;
+        //    bottom = leftCenterPoint.y + mCenterRadius / 2;
+
+        radian = mRadianLeft - mCenterOffsetAngle;
+        left = leftCenterPoint.x + 1 * mCenterRadius / 2 + 2 * mCenterRadius * Math.cos(radian);
+        top = leftCenterPoint.y - 1 * mCenterRadius / 2 - 2 * mCenterRadius * Math.sin(radian);
+        right = leftCenterPoint.x + 3 * mCenterRadius / 2 + 2 * mCenterRadius * Math.cos(radian);
+        bottom = leftCenterPoint.y + 1 * mCenterRadius / 2 - 2 * mCenterRadius * Math.sin(radian);
+        leftView.layout((int) left, (int) top, (int) right, (int) bottom);
+
+        //    rightView.layout(
+        //            (int) (rightCenterPoint.x + mCenterRadius / 2),
+        //            (int) (rightCenterPoint.y - mCenterRadius / 2),
+        //            (int) (rightCenterPoint.x + 3 * mCenterRadius / 2),
+        //            (int) (rightCenterPoint.y + mCenterRadius / 2)
+        //    );
+        //        left = rightCenterPoint.x + mCenterRadius / 2;
+        //        top = rightCenterPoint.y - mCenterRadius / 2;
+        //        right = rightCenterPoint.x + 3 * mCenterRadius / 2;
+        //        bottom = rightCenterPoint.y + mCenterRadius / 2;
+
+        radian = mRadianRight - mCenterOffsetAngle;
+        left = rightCenterPoint.x - 3 * mCenterRadius / 2 + 2 * mCenterRadius * Math.cos(radian);
+        top = rightCenterPoint.y - 1 * mCenterRadius / 2 - 2 * mCenterRadius * Math.sin(radian);
+        right = rightCenterPoint.x - 1 * mCenterRadius / 2 + 2 * mCenterRadius * Math.cos(radian);
+        bottom = rightCenterPoint.y + 1 * mCenterRadius / 2 - 2 * mCenterRadius * Math.sin(radian);
+        rightView.layout((int) left, (int) top, (int) right, (int) bottom);
+
+        //        cos(π-x) = -cos x （二正弦,第二象限除了正弦值为+外其余均为-）
+        //        cos（π+x）= -cos x （三正切,第三象限除了正切值为+外其余均为-）
+        //        sin（π-x） = sin x （二正弦,第二象限除了正弦值为+外其余均为-）
+        //        sin（π+x）= - sin x（三正切,第三象限除了正切值为+外其余均为-）
+
+        //        int left = 0;
+        //        View child;
+        //        for (int i = 0; i < childCount; i++) {
+        //            child = getChildAt(i);
+        //            if (child.getVisibility() != View.GONE) {
+        //                int width = child.getMeasuredWidth();
+        //                // childWidth = width;
+        //                child.layout(left, 0, left + width, child.getMeasuredHeight());
+        //                left += width;
+        //            }
+        //        }
+
+
+    }
+
+    @Override
+    protected void onDraw(Canvas canvas) {
+        super.onDraw(canvas);
+        Log.i(TAG, "onDraw method called!");
+
+        mCenterPaint.setColor(Color.RED);
+        canvas.drawCircle(mCenterOffsetX, mCenterOffsetY, mCenterRadius, mCenterPaint);
+
+        mCenterPaint.setColor(Color.parseColor("#FFFFFF"));
+        canvas.drawText((int) mCenterOffsetAngle + "", mCenterOffsetX, mCenterOffsetY, mCenterPaint);
+
+        /*
+         * getHeight ,getWidth 等方法必须在onMeasure 或之后取值，只有measure后才知道确切的尺寸
+         */
+
+        int contentWidth = getWidth() - mPaddingLeft - mPaddingRight;
+        int contentHeight = getHeight() - mPaddingTop - mPaddingBottom;
+
+        mCenterOffsetX = getLeft() + mPaddingLeft + contentWidth / 2;
+        mCenterOffsetY = getTop() + mPaddingTop + contentHeight / 2;
+
+        // 位置偏移量设置
+        if (!hasCallOffset) {
+            leftCenterPoint.offset(mCenterOffsetX, mCenterOffsetY);
+            topCenterPoint.offset(mCenterOffsetX, mCenterOffsetY);
+            rightCenterPoint.offset(mCenterOffsetX, mCenterOffsetY);
+            bottomCenterPoint.offset(mCenterOffsetX, mCenterOffsetY);
+
+            hasCallOffset = true;
+        }
+
+    }
+
+    public float getCenterOffsetAngle() {
+        return this.mCenterOffsetAngle;
+    }
+
+    public void setCenterOffsetAngle(float centerOffsetAngle) {
+        this.mCenterOffsetAngle = centerOffsetAngle;
+
+        // requestLayout 不断触发 onMeasure  onLayout过程
+        requestLayout();
+
+        // invalidate 不断触发onDraw
+        invalidate();
+    }
+
+    public void startAnim() {
+        // init animator
+        if (null == mOffsetAnimator) {
+            // 偏移量改为弧度
+            mOffsetAnimator = ObjectAnimator.ofFloat(this, "centerOffsetAngle", 0, (float) (2 * PI));
+            mOffsetAnimator.setInterpolator(new LinearInterpolator());
+            mOffsetAnimator.setRepeatCount(ValueAnimator.INFINITE);
+            mOffsetAnimator.setDuration(1000 * (long) (2 * PI));
+
+            //    offsetAnim.addUpdateListener(new ValueAnimator.AnimatorUpdateListener() {
+            //        @Override
+            //        public void onAnimationUpdate(ValueAnimator animation) {
+            //            int val = (Integer) animation.getAnimatedValue();
+            //
+            //
+            //
+            //        }
+            //    });
+        }
+
+        if (!mOffsetAnimator.isRunning()) {
+            mOffsetAnimator.start();
+        }
+
+    }
+
+    public void stopAnim() {
+        // init animator
+        if (null == mOffsetAnimator) {
+            return;
+        }
+
+        if (!mOffsetAnimator.isRunning()) {
+            mOffsetAnimator.end();
+        }
+    }
+
+
+    //    @Nullable
+    //    @Override
+    //    protected Parcelable onSaveInstanceState() {
+    //
+    //    }
+    //
+    //    @Override
+    //    protected void onRestoreInstanceState(Parcelable state) {
+    //
+    //    }
+
+}
+
+```
+
+以及一个属性文件 attrs_board_view_group.xml
+```
+<resources>
+    <declare-styleable name="BoardViewGroup">
+
+        <attr name="centerRadius" format="dimension"/>
+
+    </declare-styleable>
+</resources>
+
+```
+
+
+
