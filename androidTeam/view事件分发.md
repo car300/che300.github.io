@@ -10,6 +10,8 @@
     真正对MotionEvent进行处理或者说消费的方法。在dispatchTouchEvent进行调用。
 返回值：返回true表示事件被消费，本次的事件终止。返回false表示事件没有被消费，将调用父View的onTouchEvent方法。<br>
 
+![图片](https://upload-images.jianshu.io/upload_images/2839355-1c8029c84b00b2e4.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/653)
+流程图！[图片]
 ```java
 Class Activity：
     public boolean dispatchTouchEvent(MotionEvent ev) {
